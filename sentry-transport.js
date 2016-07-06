@@ -1,34 +1,46 @@
 var util = require('util'),
     raven = require('raven'),
     winston = require('winston'),
-    _ = require('underscore');
+    _ = require('lodash');
 
 var Sentry = winston.transports.Sentry = function (options) {
+  winston.Transport.call(this, _.pick(options, "level"));
 
-  this._dsn = options.dsn || '';
-  this._globalTags = options.globalTags || {};
-  this.patchGlobal = options.patchGlobal || false;
-  this._sentry = options.raven || new raven.Client(this._dsn, {logger: options.logger || 'root'});
+  // Default options
+  this.defaults = {
+    dsn: '',
+    patchGlobal: false,
+    logger: 'root',
+    levelsMap: {
+      silly: 'debug',
+      verbose: 'debug',
+      info: 'info',
+      debug: 'debug',
+      warn: 'warning',
+      error: 'error'
+    },
+    tags: {},
+    extra: {}
+  }
 
-  if(this.patchGlobal) {
+  // For backward compatibility with deprecated `globalTags` option
+  options.tags = options.tags || options.globalTags;
+
+  this.options = _.defaultsDeep(options, this.defaults);
+
+  this._sentry = this.options.raven || new raven.Client(this.options.dsn, this.options);
+
+  if(this.options.patchGlobal) {
     this._sentry.patchGlobal();
   }
 
-  this._levels_map = {
-    silly: 'debug',
-    verbose: 'debug',
-    info: 'info',
-    debug: 'debug',
-    warn: 'warning',
-    error: 'error'
-  }
-
-  // Set the level from your options
-  this.level = options.level || 'info';
-
   // Handle errors
-  this._sentry.on('error', function() {
-    console.log("Cannot talk to sentry!");
+  this._sentry.on('error', function(error) {
+    var message = "Cannot talk to sentry.";
+    if(error && error.reason) {
+        message += " Reason: " + error.reason;
+    }
+    console.log(message);
   });
 
   // Expose sentry client to winston.Logger
@@ -47,12 +59,11 @@ Sentry.prototype.name = 'sentry';
 //
 
 Sentry.prototype.log = function (level, msg, meta, callback) {
-  // TODO: handle this better
-  level = this._levels_map[level] || this.level;
+  level = this.options.levelsMap[level];
   meta = meta || {};
 
   var extraData = _.extend({}, meta),
-      tags = _.extend({}, this._globalTags, extraData.tags);
+      tags = extraData.tags;
   delete extraData.tags;
 
   var extra = {
@@ -88,7 +99,7 @@ Sentry.prototype.log = function (level, msg, meta, callback) {
         }
       }
 
-      this._sentry.captureError(msg, extra, function() {
+      this._sentry.captureException(msg, extra, function() {
         callback(null, true);
       });
     } else {
